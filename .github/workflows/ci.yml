@@ -1,0 +1,14 @@
+{
+    "name": "CI",
+    "on": [ "push" ],
+    "jobs": {
+        "build": {
+            "runs-on": "ubuntu-latest",
+            "env": { "CI": "" },
+            "steps": [
+                { "uses": "actions/checkout@v1" },
+                { "name": "CI", "run": "./ci.bash" }
+            ]
+        }
+    }
+}

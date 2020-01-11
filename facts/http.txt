@@ -1,0 +1,3 @@
+HTTP is used for two purposes: for serving static files and for carrying API
+requests and responses. For the latter, HTTP is used as a dumb message
+carrier, and all actual information is contained in the message bodies.

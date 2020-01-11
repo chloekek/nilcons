@@ -1,0 +1,332 @@
+#!/usr/bin/env perl
+
+use v5.12;
+use warnings;
+
+use Carp qw(croak);
+
+################################################################################
+# Definitions
+
+sub message
+{
+    croak 'Usage: message($name, @fields)' if @_ == 0;
+    my ($name, @fields) = @_;
+    [$name, @fields];
+}
+
+sub field
+{
+    croak 'Usage: field($name, $type)' unless @_ == 2;
+    my ($name, $type) = @_;
+    [$name, $type];
+}
+
+sub routine
+{
+    croak 'Usage: routine($name, $input, $output)' unless @_ == 3;
+    my ($name, $input, $output) = @_;
+    [$name, $input, $output];
+}
+
+################################################################################
+# D
+
+sub generateTypeD
+{
+    my ($type) = @_;
+    return "__$1" if $type =~ /^\.(.*)/;
+    return generateTypeD($1) . '[]' if $type =~ /^@(.*)/;
+    return generateTypeD($1) . '[__UUID]' if $type =~ /^#(.*)/;
+    return $type if $type =~ /^[A-Za-z][A-Za-z0-9_]*$/;
+    die "Unknown type: $type";
+}
+
+sub generateSerializeD
+{
+    my ($type) = @_;
+    return "__serialize_$1" if $type =~ /^\.(.*)/;
+    return '__serializeArray!(' . generateSerializeD($1) . ')' if $type =~ /^@(.*)/;
+    return '__serializeUuidMap!(' . generateSerializeD($1) . ')' if $type =~ /^#(.*)/;
+    return "serialize$type" if $type =~ /^[A-Za-z][A-Za-z0-9_]*$/;
+    die "Unknown type: $type";
+}
+
+sub generateDeserializeD
+{
+    my ($type) = @_;
+    return "__deserialize_$1" if $type =~ /^\.(.*)/;
+    return '__deserializeArray!(' . generateDeserializeD($1) . ')' if $type =~ /^@(.*)/;
+    return '__deserializeUuidMap!(' . generateDeserializeD($1) . ')' if $type =~ /^#(.*)/;
+    return "deserialize$type" if $type =~ /^[A-Za-z][A-Za-z0-9_]*$/;
+    die "Unknown type: $type";
+}
+
+sub generateD
+{
+    my $module   = shift;
+    my @messages = shift->@*;
+    my @routines = shift->@*;
+
+    say "module $module;";
+
+    say 'import std.datetime.systime : __SysTime = SysTime;';
+    say 'import std.range : __ElementType = ElementType;';
+    say 'import std.range : __isInputRange = isInputRange;';
+    say 'import std.range : __isOutputRange = isOutputRange;';
+    say 'import std.range : __put = put;';
+    say 'import std.typecons : __Tuple = Tuple;';
+    say 'import std.uuid : __UUID = UUID;';
+
+    say 'private:';
+
+    say 'auto __deserializeUuidMap(alias F, I)(ref I i)';
+    say '    if (__isInputRange!I';
+    say '    &&  is(__ElementType!I : ubyte))';
+    say '{';
+    say '    alias E = typeof(F(i));';
+    say '    E[__UUID] r;';
+    say '    const n = __deserialize_u16(i);';
+    say '    for (size_t j = 0; j < n; ++j) {';
+    say '        const k = __deserialize_uuid(i);';
+    say '        auto  v = F(i);';
+    say '        r[k] = v;';
+    say '    }';
+    say '    return r;';
+    say '}';
+
+    say 'alias __unit = __Tuple!();';
+    say 'void __serialize_unit(O)(ref O o, __unit t)';
+    say '    if (__isOutputRange!(O, ubyte))';
+    say '{';
+    say '}';
+
+    say 'alias __bool = bool;';
+    say '__bool __deserialize_bool(I)(ref I i)';
+    say '    if (__isInputRange!I';
+    say '    &&  is(__ElementType!I : ubyte))';
+    say '{';
+    say '    const a = __deserialize_u8(i);';
+    say '    if (a == 0) return false;';
+    say '    if (a == 1) return true;';
+    # TODO: Throw more concrete exception type.
+    say '    throw new Exception("Bad bool");';
+    say '}';
+
+    say 'alias __u8 = ubyte;';
+    say '__u8 __deserialize_u8(I)(ref I i)';
+    say '    if (__isInputRange!I';
+    say '    &&  is(__ElementType!I : ubyte))';
+    say '{';
+    say '    import std.range : empty, front, popFront;';
+    say '    if (i.empty)';
+    # TODO: Throw more concrete exception type.
+    say '        throw new Exception("EOF");';
+    say '    const t = i.front;';
+    say '    i.popFront;';
+    say '    return t;';
+    say '}';
+
+    say 'alias __u16 = ushort;';
+    say '__u16 __deserialize_u16(I)(ref I i)';
+    say '    if (__isInputRange!I';
+    say '    &&  is(__ElementType!I : ubyte))';
+    say '{';
+    say '    __u16 a = __deserialize_u8(i);';
+    say '    __u16 b = __deserialize_u8(i);';
+    say '    return cast(__u16) (a << 0 | b << 8);';
+    say '}';
+
+    say 'alias __u32 = uint;';
+    say '__u32 __deserialize_u32(I)(ref I i)';
+    say '    if (__isInputRange!I';
+    say '    &&  is(__ElementType!I : ubyte))';
+    say '{';
+    say '    __u32 a = __deserialize_u16(i);';
+    say '    __u32 b = __deserialize_u16(i);';
+    say '    return a << 0 | b << 16;';
+    say '}';
+
+    say 'alias __u64 = ulong;';
+    say '__u64 __deserialize_u64(I)(ref I i)';
+    say '    if (__isInputRange!I';
+    say '    &&  is(__ElementType!I : ubyte))';
+    say '{';
+    say '    __u64 a = __deserialize_u32(i);';
+    say '    __u64 b = __deserialize_u32(i);';
+    say '    return a << 0 | b << 32;';
+    say '}';
+
+    say 'alias __i64 = long;';
+    say '__i64 __deserialize_i64(I)(ref I i)';
+    say '    if (__isInputRange!I';
+    say '    &&  is(__ElementType!I : ubyte))';
+    say '{';
+    say '    return __deserialize_u64(i);';
+    say '}';
+
+    say 'alias __instant = __SysTime;';
+    say '__instant __deserialize_instant(I)(ref I i)';
+    say '    if (__isInputRange!I';
+    say '    &&  is(__ElementType!I : ubyte))';
+    say '{';
+    say '    import core.time : dur;';
+    say '    const epoch = __SysTime.fromUnixTime(0);';
+    say '    const delta = __deserialize_i64(i);';
+    say '    return epoch + delta.dur!"msecs";';
+    say '}';
+
+    say 'alias __uuid = __UUID;';
+    say '__uuid __deserialize_uuid(I)(ref I i)';
+    say '    if (__isInputRange!I';
+    say '    &&  is(__ElementType!I : ubyte))';
+    say '{';
+    say '    ubyte[16] a = [';
+    for (1 .. 16) {
+        say '        __deserialize_u8(i),';
+    }
+    say '    ];';
+    say '    return __UUID(a);';
+    say '}';
+
+    say 'alias __unicode = char[];';
+    say '__unicode __deserialize_unicode(I)(ref I i)';
+    say '    if (__isInputRange!I';
+    say '    &&  is(__ElementType!I : ubyte))';
+    say '{';
+    say '    const n = __deserialize_u16(i);';
+    say '    auto  t = new char[n];';
+    say '    for (size_t j = 0; j < n; ++j)';
+    say '        t[j] = cast(char) __deserialize_u8(i);';
+    say '    return t;';
+    say '}';
+
+    for (@messages) {
+        my ($name, @fields) = $_->@*;
+
+        say 'public';
+        say "struct $name";
+        say '{';
+        for (@fields) {
+            my ($name, $type) = $_->@*;
+            my $typeD = generateTypeD($type);
+            say "    $typeD $name;";
+        }
+        say '}';
+
+        say 'public';
+        say "void serialize$name(__O)(ref __O __o, $name __t)";
+        say '    if (__isOutputRange!(__O, ubyte))';
+        say '{';
+        for (@fields) {
+            my ($name, $type) = $_->@*;
+            my $serializeD = generateSerializeD($type);
+            say "    $serializeD(__o, __t.$name);";
+        }
+        say '}';
+
+        say 'public';
+        say "$name deserialize$name(__I)(ref __I __i)";
+        say '    if (__isInputRange!__I';
+        say '    &&  is(__ElementType!__I : ubyte))';
+        say '{';
+        say "    return $name(";
+        for (@fields) {
+            my ($name, $type) = $_->@*;
+            my $deserializeD = generateDeserializeD($type);
+            say "         $deserializeD(__i),";
+        }
+        say '    );';
+        say '}';
+    }
+
+    say 'public';
+    say 'interface Service';
+    say '{';
+    for (@routines) {
+        my ($name, $input, $output) = $_->@*;
+        my $inputD  = generateTypeD($input);
+        my $outputD = generateTypeD($output);
+        say '    @safe';
+        say "    $outputD $name(const($inputD));";
+    }
+    say '}';
+
+    say 'public';
+    say 'void serveCgi(__I, __O)(';
+    say '    Service __s,';
+    say '    const(char)[] __m,';
+    say '    const(char)[] __r,';
+    say '    const(char)[] __c,';
+    say '    ref __I __i,';
+    say '    ref __O __o,';
+    say ')';
+    say '    if (__isInputRange!__I';
+    say '    &&  is(__ElementType!__I : ubyte)';
+    say '    &&  __isOutputRange!(__O, ubyte))';
+    say '{';
+
+    say '    if (__m != "POST") {';
+    say '        __put(__o, "Status: 405\r\n");';
+    say '        __put(__o, "\r\n");';
+    say '        return;';
+    say '    }';
+
+    say '    if (__c != "application/vnd.smlttc.idl") {';
+    say '        __put(__o, "Status: 415\r\n");';
+    say '        __put(__o, "\r\n");';
+    say '        return;';
+    say '    }';
+
+    say '    switch (__r) {';
+    for (@routines) {
+        my ($name, $input, $output) = $_->@*;
+        my $deserializeD = generateDeserializeD($input);
+        my $serializeD   = generateSerializeD($output);
+        say "        case \"/$name\": {";
+        say "            const __di = $deserializeD(__i);";
+        say "            const __do = __s.$name(__di);";
+        say '            __put(__o, "Status: 200\r\n");';
+        say '            __put(__o, "Content-Type: application/vnd.smlttc.idl\r\n");';
+        say '            __put(__o, "\r\n");';
+        say "            $serializeD(__o, __do);";
+        say '            break;';
+        say '        }';
+    }
+    say '        default: {';
+    say '            __put(__o, "Status: 404\r\n");';
+    say '            __put(__o, "\r\n");';
+    say '            return;';
+    say '        }';
+    say '    }';
+    say '}';
+}
+
+################################################################################
+# Example
+
+my @messages = (
+    message(
+        'AddItemTally',
+        field('dec', '.u16'),
+        field('inc', '.u16'),
+    ),
+    message(
+        'SetItemDone',
+        field('at',   '.instant'),
+        field('done', '.bool'),
+    ),
+    message(
+        'SetItemText',
+        field('at',   '.instant'),
+        field('text', '.unicode'),
+    ),
+);
+
+my @routines = (
+    routine('addItemTally', '#AddItemTally', '.unit'),
+    routine('setItemDone', '#SetItemDone', '.unit'),
+    routine('setItemText', '#SetItemText', '.unit'),
+);
+
+generateD('nilcons.api.interface_', \@messages, \@routines);
